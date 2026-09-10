@@ -1,0 +1,25 @@
+# 비밀 키 / 환경 변수 (절대 커밋 금지)
+keys/
+*.pem
+*.ppk
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+.ruff_cache/
+
+# 로그 / 백업
+*.log
+backups/
+
+# 에디터 / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

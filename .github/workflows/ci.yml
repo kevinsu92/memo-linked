@@ -1,0 +1,141 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+# 같은 브랜치에 연속 푸시하면 앞선 실행을 취소한다.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # 운영 서버(Ubuntu 26.04)의 python3 와 맞춘다.
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      mongodb:
+        image: mongo:8
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1})'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: 테스트
+        env:
+          # conftest 가 읽는 이름이어야 실제로 적용된다.
+          TEST_MONGO_URI: mongodb://localhost:27017
+        run: pytest
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # ruff 버전을 고정해야 로컬과 CI 결과가 갈리지 않는다.
+      - name: 의존성 설치
+        run: pip install -r requirements-dev.txt
+
+      - name: 정적 검사
+        run: |
+          ruff check .
+          ruff format --check .
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # gitleaks 가 전체 이력을 훑어야 하므로 얕은 clone 을 쓰지 않는다.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 의존성 취약점 검사
+        run: |
+          pip install pip-audit==2.7.3
+          pip-audit -r requirements.txt --strict
+
+      - name: 시크릿 스캔
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 셸 스크립트 검사
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y shellcheck
+          shellcheck deploy.sh scripts/*.sh
+
+      - name: nginx 설치
+        run: |
+          # 설정이 `http2 on;` 을 쓰므로 nginx 1.25.1 이상이어야 한다. 우분투 기본
+          # 저장소는 1.24 라 이 지시자를 모르고, 그 상태로 검증하면 실제 서버에서는
+          # 잘 도는 설정이 CI 에서만 깨진다. 배포 대상과 같은 계열을 설치한다.
+          curl -fsSL https://nginx.org/keys/nginx_signing.key \
+            | sudo gpg --dearmor -o /usr/share/keyrings/nginx.gpg
+          echo "deb [signed-by=/usr/share/keyrings/nginx.gpg]" \
+            "http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx" \
+            | sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null
+          sudo apt-get update -y
+          sudo apt-get install -y nginx
+          nginx -v
+
+      - name: nginx 설정 검증
+        run: |
+          # 템플릿을 실제 도메인으로 렌더링해 문법을 확인한다. nginx.org 패키지는
+          # sites-enabled 를 읽지 않으므로 conf.d 에 넣는다. 서버에서는 deploy.sh 가
+          # 우분투 관례대로 sites-available 에 두지만, 여기서 보는 것은 문법뿐이다.
+          sudo mkdir -p /etc/nginx/snippets /var/www/certbot
+          sudo cp deploy/nginx-headers.conf /etc/nginx/snippets/memo-headers.conf
+          sudo cp deploy/nginx-limits.conf /etc/nginx/conf.d/memo-limits.conf
+          sudo rm -f /etc/nginx/conf.d/default.conf
+          sudo mkdir -p /etc/letsencrypt/live/ci.example.com
+          sudo openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -keyout /etc/letsencrypt/live/ci.example.com/privkey.pem \
+            -out /etc/letsencrypt/live/ci.example.com/fullchain.pem \
+            -subj "/CN=ci.example.com"
+          sed 's/DOMAIN_PLACEHOLDER/ci.example.com/g' deploy/nginx-memo.conf \
+            | sudo tee /etc/nginx/conf.d/memo.conf > /dev/null
+          sudo nginx -t
+
+      - name: systemd 유닛 검증
+        run: systemd-analyze verify deploy/memo.service || true

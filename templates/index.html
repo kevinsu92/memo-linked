@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="마크다운과 태그를 지원하는 간단한 메모장." />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#16181c" media="(prefers-color-scheme: dark)" />
+    <title>나만의 메모장</title>
+
+    <!-- 첫 페인트 전에 테마를 확정해 흰 화면 깜빡임을 막는다. -->
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin />
+
+    <link rel="icon"
+          href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Ctext%20y='14'%20font-size='14'%3E%F0%9F%93%9D%3C/text%3E%3C/svg%3E" />
+    <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+        integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+        crossorigin="anonymous"
+    />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+
+    <!-- 마크다운 렌더링. 로드에 실패하면 앱은 평문으로 안전하게 동작한다. -->
+    <script
+        src="https://cdnjs.cloudflare.com/ajax/libs/marked/15.0.7/marked.min.js"
+        integrity="sha384-H+hy9ULve6xfxRkWIh/YOtvDdpXgV2fmAGQkIDTxIgZwNoaoBal14Di2YTMR6MzR"
+        crossorigin="anonymous"
+        defer
+    ></script>
+    <script
+        src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.2.4/purify.min.js"
+        integrity="sha384-eEu5CTj3qGvu9PdJuS+YlkNi7d2XxQROAFYOr59zgObtlcux1ae1Il3u7jvdCSWu"
+        crossorigin="anonymous"
+        defer
+    ></script>
+    <script id="memo-config" type="application/json">
+        {
+            "maxTitle": {{ limits['MAX_TITLE'] }},
+            "maxContent": {{ limits['MAX_CONTENT'] }},
+            "maxTags": {{ limits['MAX_TAGS'] }},
+            "maxTagLen": {{ limits['MAX_TAG_LEN'] }}
+        }
+    </script>
+    <script src="{{ url_for('static', filename='js/config.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/crypto.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/panels.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/memo-menu.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">본문으로 건너뛰기</a>
+<noscript>
+    <p class="noscript-warning">
+        이 메모장은 자바스크립트가 있어야 동작합니다. 브라우저에서 자바스크립트를 켜 주세요.
+    </p>
+</noscript>
+
+<div class="wrap">
+    <header class="topbar">
+        <h1>나만의 메모장 <span class="ver">ver6.0</span></h1>
+        <div class="spacer"></div>
+        <button id="graph-btn" type="button" class="btn btn-sm btn-quiet">🕸 연결 그래프</button>
+        <button id="activity-btn" type="button" class="btn btn-sm btn-quiet">🌱 활동 기록</button>
+        <button id="theme-toggle" type="button" class="btn btn-sm btn-quiet"
+                aria-pressed="false">🌙 다크 모드</button>
+    </header>
+
+    <main id="main" tabindex="-1">
+        <section class="writer" aria-labelledby="writer-heading">
+            <h2 id="writer-heading" class="visually-hidden">새 메모 작성</h2>
+
+            <div class="field">
+                <label for="title">제목</label>
+                <input id="title" class="form-control" maxlength="{{ limits['MAX_TITLE'] }}"
+                       autocomplete="off" placeholder="제목을 입력하세요" />
+            </div>
+
+            <div class="field">
+                <label for="content">내용</label>
+                <textarea id="content" class="form-control" rows="4"
+                          maxlength="{{ limits['MAX_CONTENT'] }}"
+                          aria-describedby="content-hint"
+                          placeholder="마크다운과 [[다른 메모 제목]] 링크를 쓸 수 있습니다."></textarea>
+            </div>
+
+            <div class="field">
+                <label for="tags">태그</label>
+                <input id="tags" class="form-control" autocomplete="off"
+                       placeholder="쉼표로 구분, 최대 {{ limits['MAX_TAGS'] }}개" />
+            </div>
+
+            <label class="checkbox">
+                <input type="checkbox" id="lock-toggle" />
+                이 메모 잠그기 (브라우저에서 암호화, 서버도 내용을 모름)
+            </label>
+
+            <div class="field hidden" id="lock-field">
+                <label for="lock-pass">비밀번호</label>
+                <input id="lock-pass" class="form-control search-field" type="password"
+                       autocomplete="new-password" />
+                <p class="hint">
+                    잊어버리면 되살릴 방법이 없습니다. 잠근 메모는 검색되지 않고,
+                    나중에 고칠 수 없으며, 암호문 길이 때문에 600자까지 쓸 수 있습니다.
+                </p>
+            </div>
+
+            <p id="writer-error" class="field-error" role="alert"></p>
+
+            <button id="save-btn" type="button" class="btn btn-primary">저장하기</button>
+            <span class="hint" id="content-hint">Ctrl+Enter 저장 · Ctrl+K 찾기 · 최대
+                {{ limits['MAX_CONTENT'] }}자 ·
+                <span id="char-count" aria-live="polite">0 / {{ limits['MAX_CONTENT'] }}</span></span>
+        </section>
+
+        <section aria-labelledby="list-heading">
+            <h2 id="list-heading" class="visually-hidden">메모 목록</h2>
+
+            <div class="toolbar">
+                <div>
+                    <label for="search">검색</label>
+                    <input id="search" type="search" class="form-control search-field"
+                           autocomplete="off" placeholder="제목·내용에서 찾기" />
+                </div>
+                <div>
+                    <label for="sort">정렬</label>
+                    <select id="sort" class="form-select sort-field">
+                        <option value="newest">최신순</option>
+                        <option value="oldest">오래된순</option>
+                        <option value="like">좋아요순</option>
+                    </select>
+                </div>
+                <span class="count" id="count"></span>
+            </div>
+
+            <h3 class="visually-hidden">태그로 거르기</h3>
+            <ul id="tagbar" class="tagbar"></ul>
+
+            <ul id="cards" class="cards" tabindex="-1"></ul>
+
+            <div class="more">
+                <button id="more-btn" type="button" class="btn btn-quiet hidden">
+                    더 보기
+                </button>
+            </div>
+
+            <details class="admin">
+                <summary>예전 메모 관리</summary>
+                <p class="hint">
+                    소유자 정보가 없는 예전 메모를 고치려면 서버에 설정된 관리자 토큰이
+                    필요합니다. 입력하면 이 브라우저에만 저장됩니다.
+                </p>
+                <div class="field">
+                    <label for="admin-token">관리자 토큰</label>
+                    <input id="admin-token" class="form-control search-field" type="password"
+                           autocomplete="off" />
+                </div>
+                <button id="admin-save" type="button" class="btn btn-sm btn-quiet">저장</button>
+            </details>
+        </section>
+    </main>
+</div>
+
+<!-- 스크린 리더에 목록 변화를 알린다. -->
+<p id="status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></p>
+
+<!-- 알림은 순서를 기다리고, 오류는 즉시 읽히도록 영역을 나눈다. -->
+<div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+<div id="alerts" class="toasts alerts" role="alert" aria-live="assertive"></div>
+</body>
+</html>

@@ -1,0 +1,62 @@
+[Unit]
+Description=나만의 메모장 (Flask + gunicorn)
+After=network.target mongod.service
+Wants=mongod.service
+
+[Service]
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/memo
+EnvironmentFile=/home/ubuntu/memo/.env
+Environment=PYTHONUNBUFFERED=1
+# HOME 을 앱 디렉터리로 둔다. ProtectHome 때문에 실제 홈에는 쓸 수 없다.
+Environment=HOME=/home/ubuntu/memo
+
+# gthread 워커는 MongoDB I/O 를 기다리는 동안 다른 요청을 처리할 수 있다.
+# max-requests 로 워커를 주기적으로 재생성해 메모리 누수를 끊는다.
+ExecStart=/home/ubuntu/memo/.venv/bin/gunicorn \
+    --workers 2 --threads 4 --worker-class gthread \
+    --timeout 25 --graceful-timeout 20 --keep-alive 5 \
+    --max-requests 1000 --max-requests-jitter 100 \
+    --worker-tmp-dir /dev/shm \
+    --bind 127.0.0.1:5000 \
+    --access-logfile - --error-logfile - \
+    wsgi:app
+
+# 무중단 재시작: 워커를 하나씩 교체한다.
+ExecReload=/bin/kill -s HUP $MAINPID
+TimeoutStopSec=30
+Restart=always
+RestartSec=3
+
+# ---- 하드닝
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/memo
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+
+# ---- 자원 상한 (메모리 908MB 인스턴스에서 mongod 가 먼저 죽지 않게)
+MemoryHigh=280M
+MemoryMax=350M
+TasksMax=64
+OOMPolicy=restart
+
+[Install]
+WantedBy=multi-user.target
